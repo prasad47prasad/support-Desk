@@ -8,8 +8,9 @@ from database import SessionLocal, engine
 from models import Base, Employee, Ticket, Client, TicketHistory, TicketChat
 
 app = FastAPI()
+
 os.makedirs("uploads", exist_ok=True)
-# STATIC FILES
+
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # CORS
