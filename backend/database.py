@@ -1,9 +1,11 @@
+import os
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, declarative_base
 
-DATABASE_URL = "mysql+pymysql://root:admin123@localhost/support_ticket_db"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
+if not DATABASE_URL:
+    raise Exception("DATABASE_URL environment variable is missing")
 
 engine = create_engine(
     DATABASE_URL,
