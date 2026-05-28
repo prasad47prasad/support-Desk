@@ -1,17 +1,20 @@
 import os
-from datetime import datetime
-from fastapi import FastAPI, Form
+from datetime import datetime, timedelta
+
+from fastapi import FastAPI, Form, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from database import SessionLocal, engine
 from models import Base, Employee, Ticket, Client, TicketHistory, TicketChat
 
+
 app = FastAPI()
 
+# Create uploads folder if not exists
 os.makedirs("uploads", exist_ok=True)
-
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+
 
 # CORS
 app.add_middleware(
@@ -22,11 +25,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# CREATE DATABASE TABLES
+
+# Create database tables
 Base.metadata.create_all(bind=engine)
 
-# DATABASE SESSION
-db = SessionLocal()
+
+# Database session per request
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 # -----------------------------------
@@ -34,10 +44,7 @@ db = SessionLocal()
 # -----------------------------------
 @app.get("/")
 def home():
-
-    return {
-        "message": "Office Ticket System Running"
-    }
+    return {"message": "Office Ticket System Running"}
 
 
 # -----------------------------------
@@ -45,60 +52,53 @@ def home():
 # -----------------------------------
 @app.post("/add-employee")
 def add_employee(
-
     employee_id: str,
     name: str,
     role: str,
-    password: str
-
+    password: str,
+    db=Depends(get_db)
 ):
+    try:
+        existing_employee = db.query(Employee).filter(
+            Employee.employee_id == employee_id
+        ).first()
 
-    existing_employee = db.query(Employee).filter(
-        Employee.employee_id == employee_id
-    ).first()
+        if existing_employee:
+            return {"error": "Employee ID already exists"}
 
-    if existing_employee:
+        employee = Employee(
+            employee_id=employee_id,
+            name=name,
+            role=role,
+            password=password
+        )
 
-        return {
-            "error": "Employee ID already exists"
-        }
+        db.add(employee)
+        db.commit()
+        db.refresh(employee)
 
-    employee = Employee(
-        
-        employee_id=employee_id,
-        name=name,
-        role=role,
-        password=password
+        return {"message": "Employee Added Successfully"}
 
-    )
-
-    db.add(employee)
-    db.commit()
-
-    return {
-        "message": "Employee Added Successfully"
-    }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # -----------------------------------
 # GET ALL EMPLOYEES
 # -----------------------------------
 @app.get("/employees")
-def get_employees():
-
+def get_employees(db=Depends(get_db)):
     employees = db.query(Employee).all()
 
     return [
-
         {
             "id": emp.id,
             "employee_id": emp.employee_id,
             "name": emp.name,
             "role": emp.role
         }
-
         for emp in employees
-
     ]
 
 
@@ -106,79 +106,69 @@ def get_employees():
 # LOGIN
 # -----------------------------------
 @app.post("/login")
-def login(employee_id: str, password: str):
-
+def login(
+    employee_id: str,
+    password: str,
+    db=Depends(get_db)
+):
     employee = db.query(Employee).filter(
-
         Employee.employee_id == employee_id,
         Employee.password == password
-
     ).first()
 
     if not employee:
-
-        return {
-            "error": "Invalid Employee ID or Password"
-        }
+        return {"error": "Invalid Employee ID or Password"}
 
     return {
-
         "message": "Login Successful",
         "employee_id": employee.employee_id,
         "name": employee.name,
         "role": employee.role
-
     }
-# -----------------------------
+
+
+# -----------------------------------
 # ADD CLIENT
-# -----------------------------
+# -----------------------------------
 @app.post("/add-client")
 def add_client(
     client_name: str,
     whatsapp_group_link: str,
     contact_person: str,
-    mobile_number: str
+    mobile_number: str,
+    db=Depends(get_db)
 ):
-    existing_client = db.query(Client).filter(
-        Client.client_name == client_name
-    ).first()
+    try:
+        existing_client = db.query(Client).filter(
+            Client.client_name == client_name
+        ).first()
 
-    if existing_client:
-        return {"error": "Client already exists"}
+        if existing_client:
+            return {"error": "Client already exists"}
 
-    client = Client(
-        client_name=client_name,
-        whatsapp_group_link=whatsapp_group_link,
-        contact_person=contact_person,
-        mobile_number=mobile_number
-    )
+        client = Client(
+            client_name=client_name,
+            whatsapp_group_link=whatsapp_group_link,
+            contact_person=contact_person,
+            mobile_number=mobile_number
+        )
 
-    db.add(client)
-    db.commit()
+        db.add(client)
+        db.commit()
+        db.refresh(client)
 
-    return {"message": "Client Added Successfully"}
+        return {"message": "Client Added Successfully"}
 
-# -----------------------------
-# DELETE CLIENTS
-# -----------------------------
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.delete("/delete-client/{client_id}")
-def delete_client(client_id: int):
-    client = db.query(Client).filter(Client.id == client_id).first()
 
-    if not client:
-        return {"error": "Client not found"}
-
-    db.delete(client)
-    db.commit()
-
-    return {"message": "Client Deleted Successfully"}
-
-# -----------------------------
+# -----------------------------------
 # GET ALL CLIENTS
-# -----------------------------
+# -----------------------------------
 @app.get("/clients")
-def get_clients():
+def get_clients(db=Depends(get_db)):
     clients = db.query(Client).all()
 
     return [
@@ -192,181 +182,202 @@ def get_clients():
         for c in clients
     ]
 
-# -----------------------------
+
+# -----------------------------------
+# DELETE CLIENT
+# -----------------------------------
+@app.delete("/delete-client/{client_id}")
+def delete_client(
+    client_id: int,
+    db=Depends(get_db)
+):
+    try:
+        client = db.query(Client).filter(Client.id == client_id).first()
+
+        if not client:
+            return {"error": "Client not found"}
+
+        db.delete(client)
+        db.commit()
+
+        return {"message": "Client Deleted Successfully"}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -----------------------------------
 # RESET PASSWORD
-# -----------------------------
+# -----------------------------------
 @app.put("/reset-password")
-def reset_password(employee_id: str, new_password: str):
+def reset_password(
+    employee_id: str,
+    new_password: str,
+    db=Depends(get_db)
+):
+    try:
+        employee = db.query(Employee).filter(
+            Employee.employee_id == employee_id
+        ).first()
 
-    employee = db.query(Employee).filter(
-        Employee.employee_id == employee_id
-    ).first()
+        if not employee:
+            return {"error": "Employee not found"}
 
-    if not employee:
-        return {"error": "Employee not found"}
+        employee.password = new_password
+        db.commit()
 
-    employee.password = new_password
-    db.commit()
+        return {"message": "Password Reset Successful"}
 
-    return {"message": "Password Reset Successful"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
-# -----------------------------
+
+# -----------------------------------
 # UPDATE EMPLOYEE
-# -----------------------------
+# -----------------------------------
 @app.put("/update-employee/{employee_id}")
 def update_employee(
     employee_id: str,
     name: str,
-    role: str
+    role: str,
+    db=Depends(get_db)
 ):
+    try:
+        employee = db.query(Employee).filter(
+            Employee.employee_id == employee_id
+        ).first()
 
-    employee = db.query(Employee).filter(
-        Employee.employee_id == employee_id
-    ).first()
+        if not employee:
+            return {"error": "Employee not found"}
 
-    if not employee:
-        return {
-            "error": "Employee not found"
-        }
+        employee.name = name
+        employee.role = role
 
-    employee.name = name
-    employee.role = role
+        db.commit()
 
-    db.commit()
+        return {"message": "Employee Updated Successfully"}
 
-    return {
-        "message": "Employee Updated Successfully"
-    }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# -----------------------------
-# DELETE EMPLOYEE
-# -----------------------------
-@app.delete("/delete-employee/{employee_id}")
-def delete_employee(employee_id: str):
-    employee = db.query(Employee).filter(
-        Employee.employee_id == employee_id
-    ).first()
-
-    if not employee:
-        return {"error": "Employee not found"}
-
-    db.delete(employee)
-    db.commit()
-
-    return {"message": "Employee Deleted Successfully"}
 # -----------------------------------
-# CREATE TICKET WITH FILE UPLOAD
+# DELETE EMPLOYEE
+# -----------------------------------
+@app.delete("/delete-employee/{employee_id}")
+def delete_employee(
+    employee_id: str,
+    db=Depends(get_db)
+):
+    try:
+        employee = db.query(Employee).filter(
+            Employee.employee_id == employee_id
+        ).first()
+
+        if not employee:
+            return {"error": "Employee not found"}
+
+        db.delete(employee)
+        db.commit()
+
+        return {"message": "Employee Deleted Successfully"}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -----------------------------------
+# CREATE TICKET
 # -----------------------------------
 @app.post("/create-ticket")
 async def create_ticket(
     client_id: int = Form(...),
     issue: str = Form(...),
     priority: str = Form(...),
-    assigned_to: str = Form("Auto")
+    assigned_to: str = Form("Auto"),
+    db=Depends(get_db)
 ):
+    try:
+        client = db.query(Client).filter(Client.id == client_id).first()
 
-    client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            return {"error": "Client not found"}
 
-    if not client:
-        return {"error": "Client not found"}
+        employees = db.query(Employee).all()
 
-    employees = db.query(Employee).all()
+        if not employees:
+            return {"error": "No employees found"}
 
-    if not employees:
-        return {"error": "No employees found"}
+        if assigned_to != "Auto":
+            assigned_employee = db.query(Employee).filter(
+                Employee.name == assigned_to
+            ).first()
 
-    if assigned_to != "Auto":
-        assigned_employee = db.query(Employee).filter(
-            Employee.name == assigned_to
-        ).first()
+            if not assigned_employee:
+                return {"error": "Selected employee not found"}
 
-        if not assigned_employee:
-            return {"error": "Selected employee not found"}
-
-    else:
-        last_ticket = db.query(Ticket).order_by(Ticket.id.desc()).first()
-
-        if not last_ticket:
-            assigned_employee = employees[0]
         else:
-            last_assigned = last_ticket.assigned_to
-            current_index = 0
+            last_ticket = db.query(Ticket).order_by(Ticket.id.desc()).first()
 
-            for i, emp in enumerate(employees):
-                if emp.name == last_assigned:
-                    current_index = i
-                    break
+            if not last_ticket:
+                assigned_employee = employees[0]
+            else:
+                last_assigned = last_ticket.assigned_to
+                current_index = 0
 
-            next_index = (current_index + 1) % len(employees)
-            assigned_employee = employees[next_index]
+                for i, emp in enumerate(employees):
+                    if emp.name == last_assigned:
+                        current_index = i
+                        break
 
-    ticket = Ticket(
-    client_id=client.id,
-    issue=issue,
-    priority=priority,
-    assigned_to=assigned_employee.name,
-    status="Open",
-    created_at=str(datetime.now()),
-    completed_at=None
-)
+                next_index = (current_index + 1) % len(employees)
+                assigned_employee = employees[next_index]
 
-    db.add(ticket)
-    db.commit()
+        ticket = Ticket(
+            client_id=client.id,
+            issue=issue,
+            priority=priority,
+            assigned_to=assigned_employee.name,
+            status="Open",
+            created_at=str(datetime.now()),
+            completed_at=None
+        )
 
-    history = TicketHistory(
+        db.add(ticket)
+        db.commit()
+        db.refresh(ticket)
 
-        ticket_id=ticket.id,
-        action="Ticket Created",
-        performed_by="Admin",
-        created_at=str(datetime.now())
+        history = TicketHistory(
+            ticket_id=ticket.id,
+            action="Ticket Created",
+            performed_by="Admin",
+            created_at=str(datetime.now())
+        )
 
-    )
+        db.add(history)
+        db.commit()
 
-    db.add(history)
-    db.commit()
+        return {
+            "message": "Ticket Created Successfully",
+            "ticket_id": ticket.id,
+            "client_name": client.client_name,
+            "assigned_to": assigned_employee.name
+        }
 
-    return {
-        "message": "Ticket Created Successfully",
-        "ticket_id": ticket.id,
-        "client_name": client.client_name,
-        "assigned_to": assigned_employee.name
-    }
-
-    # MANUAL ASSIGN
-    if assigned_to != "Auto":
-        assigned_employee = db.query(Employee).filter(
-            Employee.name == assigned_to
-        ).first()
-
-        if not assigned_employee:
-            return {"error": "Selected employee not found"}
-
-    # AUTO ROUND ROBIN
-    else:
-        last_ticket = db.query(Ticket).order_by(Ticket.id.desc()).first()
-
-        if not last_ticket:
-            assigned_employee = employees[0]
-        else:
-            last_assigned = last_ticket.assigned_to
-            current_index = 0
-
-            for i, emp in enumerate(employees):
-                if emp.name == last_assigned:
-                    current_index = i
-                    break
-
-            next_index = (current_index + 1) % len(employees)
-            assigned_employee = employees[next_index]
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # -----------------------------------
 # GET ALL TICKETS
 # -----------------------------------
 @app.get("/tickets")
-def get_tickets():
-
+def get_tickets(db=Depends(get_db)):
     tickets = db.query(Ticket).all()
 
     data = []
@@ -375,17 +386,17 @@ def get_tickets():
         client = db.query(Client).filter(Client.id == t.client_id).first()
 
         data.append({
-    "id": t.id,
-    "client_id": t.client_id,
-    "client_name": client.client_name if client else "Unknown",
-    "whatsapp_group_link": client.whatsapp_group_link if client else "",
-    "issue": t.issue,
-    "priority": t.priority,
-    "status": t.status,
-    "assigned_to": t.assigned_to,
-    "created_at": t.created_at,
-    "completed_at": t.completed_at
-})
+            "id": t.id,
+            "client_id": t.client_id,
+            "client_name": client.client_name if client else "Unknown",
+            "whatsapp_group_link": client.whatsapp_group_link if client else "",
+            "issue": t.issue,
+            "priority": t.priority,
+            "status": t.status,
+            "assigned_to": t.assigned_to,
+            "created_at": t.created_at,
+            "completed_at": t.completed_at
+        })
 
     return data
 
@@ -394,10 +405,12 @@ def get_tickets():
 # EMPLOYEE WISE TICKETS
 # -----------------------------------
 @app.get("/employee-tickets/{employee_name}")
-def get_employee_tickets(employee_name: str):
-
+def get_employee_tickets(
+    employee_name: str,
+    db=Depends(get_db)
+):
     tickets = db.query(Ticket).filter(
-        Ticket.assigned_to.ilike(employee_name)
+        Ticket.assigned_to == employee_name
     ).all()
 
     data = []
@@ -413,32 +426,39 @@ def get_employee_tickets(employee_name: str):
             "issue": t.issue,
             "priority": t.priority,
             "status": t.status,
-            "assigned_to": t.assigned_to
+            "assigned_to": t.assigned_to,
+            "created_at": t.created_at,
+            "completed_at": t.completed_at
         })
 
     return data
 
+
 # -----------------------------------
-# DELETE TICKET / TASKtoday = datetime.now().date()today = datetime.now().date()
+# DELETE TICKET
 # -----------------------------------
 @app.delete("/delete-ticket/{ticket_id}")
-def delete_ticket(ticket_id: int):
+def delete_ticket(
+    ticket_id: int,
+    db=Depends(get_db)
+):
+    try:
+        ticket = db.query(Ticket).filter(
+            Ticket.id == ticket_id
+        ).first()
 
-    ticket = db.query(Ticket).filter(
-        Ticket.id == ticket_id
-    ).first()
+        if not ticket:
+            return {"error": "Ticket not found"}
 
-    if not ticket:
-        return {
-            "error": "Ticket not found"
-        }
+        db.delete(ticket)
+        db.commit()
 
-    db.delete(ticket)
-    db.commit()
+        return {"message": "Ticket Deleted Successfully"}
 
-    return {
-        "message": "Ticket Deleted Successfully"
-    }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # -----------------------------------
 # UPDATE TICKET STATUS
@@ -446,90 +466,95 @@ def delete_ticket(ticket_id: int):
 @app.put("/update-ticket-status/{ticket_id}")
 def update_ticket_status(
     ticket_id: int,
-    status: str
+    status: str,
+    db=Depends(get_db)
 ):
+    try:
+        ticket = db.query(Ticket).filter(
+            Ticket.id == ticket_id
+        ).first()
 
-    ticket = db.query(Ticket).filter(
-        Ticket.id == ticket_id
-    ).first()
+        if not ticket:
+            return {"error": "Ticket not found"}
 
-    if not ticket:
+        if ticket.status == "Completed":
+            return {"error": "Completed ticket cannot be changed again"}
+
+        if ticket.status == "Open" and status != "In Progress":
+            return {"error": "Open ticket can only move to In Progress"}
+
+        if ticket.status == "In Progress" and status != "Completed":
+            return {"error": "In Progress ticket can only move to Completed"}
+
+        ticket.status = status
+
+        if status == "Completed":
+            ticket.completed_at = str(datetime.now())
+
+        db.commit()
+
+        history = TicketHistory(
+            ticket_id=ticket.id,
+            action=status,
+            performed_by=ticket.assigned_to,
+            created_at=str(datetime.now())
+        )
+
+        db.add(history)
+        db.commit()
+
         return {
-            "error": "Ticket not found"
+            "message": "Ticket Status Updated",
+            "ticket_id": ticket.id,
+            "new_status": ticket.status
         }
 
-    # Prevent completed ticket from changing again
-    if ticket.status == "Completed":
-        return {
-            "error": "Completed ticket cannot be changed again"
-        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
-    # Open ticket can only move to In Progress
-    if ticket.status == "Open" and status != "In Progress":
-        return {
-            "error": "Open ticket can only move to In Progress"
-        }
-
-    # In Progress ticket can only move to Completed
-    if ticket.status == "In Progress" and status != "Completed":
-        return {
-            "error": "In Progress ticket can only move to Completed"
-        }
-
-    ticket.status = status
-
-    if status == "Completed":
-      ticket.completed_at = str(datetime.now())
-
-    db.commit()
-
-    history = TicketHistory(
-
-        ticket_id=ticket.id,
-        action=status,
-        performed_by=ticket.assigned_to,
-        created_at=str(datetime.now())
-
-    )
-
-    db.add(history)
-    db.commit()
-
-    return {
-        "message": "Ticket Status Updated",
-        "ticket_id": ticket.id,
-        "new_status": ticket.status
-    }
 
 # -----------------------------------
-# TICKET CHAT
+# TICKET CHAT SEND
 # -----------------------------------
-
 @app.post("/ticket-chat")
 def send_ticket_chat(
     ticket_id: int,
     sender_name: str,
-    message: str
+    message: str,
+    db=Depends(get_db)
 ):
+    try:
+        ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
 
-    chat = TicketChat(
-        ticket_id=ticket_id,
-        sender_name=sender_name,
-        message=message,
-        created_at=str(datetime.now())
-    )
+        if not ticket:
+            return {"error": "Ticket not found"}
 
-    db.add(chat)
-    db.commit()
+        chat = TicketChat(
+            ticket_id=ticket_id,
+            sender_name=sender_name,
+            message=message,
+            created_at=str(datetime.now())
+        )
 
-    return {
-        "message": "Chat Message Sent Successfully"
-    }
+        db.add(chat)
+        db.commit()
+
+        return {"message": "Chat Message Sent Successfully"}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
+# -----------------------------------
+# GET TICKET CHAT
+# -----------------------------------
 @app.get("/ticket-chat/{ticket_id}")
-def get_ticket_chat(ticket_id: int):
-
+def get_ticket_chat(
+    ticket_id: int,
+    db=Depends(get_db)
+):
     chats = db.query(TicketChat).filter(
         TicketChat.ticket_id == ticket_id
     ).all()
@@ -545,17 +570,13 @@ def get_ticket_chat(ticket_id: int):
         for c in chats
     ]
 
-# -----------------------------------
-# Daily Reports
-# -----------------------------------
 
-
+# -----------------------------------
+# DAILY REPORT
+# -----------------------------------
 @app.get("/daily-report")
-def daily_report():
-
+def daily_report(db=Depends(get_db)):
     today = datetime.now().date()
-    from datetime import timedelta
-
     yesterday = today - timedelta(days=1)
 
     tickets = db.query(Ticket).all()
@@ -567,7 +588,6 @@ def daily_report():
     yesterday_pending = []
 
     for t in tickets:
-
         if t.created_at:
             created_date = datetime.fromisoformat(t.created_at).date()
 
@@ -593,13 +613,15 @@ def daily_report():
         "yesterday_pending": len(yesterday_pending)
     }
 
+
 # -----------------------------------
 # TICKET HISTORY
 # -----------------------------------
-
 @app.get("/ticket-history/{ticket_id}")
-def get_ticket_history(ticket_id: int):
-
+def get_ticket_history(
+    ticket_id: int,
+    db=Depends(get_db)
+):
     history = db.query(TicketHistory).filter(
         TicketHistory.ticket_id == ticket_id
     ).all()
