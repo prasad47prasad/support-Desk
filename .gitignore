@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+*.db
+tickets.db
+node_modules/
+dist/
+uploads/*
+!uploads/.gitkeep
+.env.local
+.env.production
